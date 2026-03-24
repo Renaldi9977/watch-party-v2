@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Watch Party - Dashboard</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="logo-small">
+        <span class="logo-icon">🎬</span>
+        <span>Watch Party</span>
+      </div>
+      <div class="user-info">
+        <span id="welcomeUser">Halo, User</span>
+        <button id="logoutBtn" class="btn btn-small btn-secondary">Keluar</button>
+      </div>
+    </header>
+    
+    <main class="dashboard">
+      <section class="room-actions">
+        <div class="action-card">
+          <h2>Buat Room Baru</h2>
+          <p>Buat room dan undang teman nonton bareng</p>
+          <form id="createRoomForm">
+            <input type="text" id="roomName" placeholder="Nama room baru..." required>
+            <button type="submit" class="btn btn-primary">Buat</button>
+          </form>
+        </div>
+        
+        <div class="action-card">
+          <h2>Join Room</h2>
+          <p>Masukkan kode room untuk bergabung</p>
+          <form id="joinRoomForm">
+            <input type="text" id="roomCode" placeholder="Kode room (contoh: ABC123)" required maxlength="6" style="text-transform: uppercase;">
+            <button type="submit" class="btn btn-primary">Gabung</button>
+          </form>
+        </div>
+      </section>
+      
+      <section class="active-rooms">
+        <h2>Room Aktif</h2>
+        <div id="roomsList" class="rooms-list">
+          <p class="no-rooms">Belum ada room aktif</p>
+        </div>
+      </section>
+    </main>
+  </div>
+  
+  <script>
+    // Check login
+    const username = localStorage.getItem('username');
+    if (!username) {
+      window.location.href = '/login';
+    }
+    document.getElementById('welcomeUser').textContent = `Halo, ${username}`;
+    
+    // Logout
+    document.getElementById('logoutBtn').addEventListener('click', () => {
+      localStorage.removeItem('username');
+      window.location.href = '/login';
+    });
+    
+    // Create room
+    document.getElementById('createRoomForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const roomName = document.getElementById('roomName').value;
+      
+      try {
+        const res = await fetch('/api/create-room', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomName, username })
+        });
+        
+        const data = await res.json();
+        
+        if (data.success) {
+          window.location.href = `/room/${data.roomCode}`;
+        } else {
+          alert(data.error);
+        }
+      } catch (err) {
+        alert('Terjadi kesalahan. Coba lagi.');
+      }
+    });
+    
+    // Join room
+    document.getElementById('joinRoomForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const roomCode = document.getElementById('roomCode').value.toUpperCase();
+      
+      try {
+        const res = await fetch('/api/join-room', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomCode, username })
+        });
+        
+        const data = await res.json();
+        
+        if (data.success) {
+          window.location.href = `/room/${roomCode}`;
+        } else {
+          alert(data.error);
+        }
+      } catch (err) {
+        alert('Terjadi kesalahan. Coba lagi.');
+      }
+    });
+    
+    // Load active rooms
+    async function loadRooms() {
+      try {
+        const res = await fetch('/api/rooms');
+        const rooms = await res.json();
+        
+        const listEl = document.getElementById('roomsList');
+        
+        if (rooms.length === 0) {
+          listEl.innerHTML = '<p class="no-rooms">Belum ada room aktif</p>';
+          return;
+        }
+        
+        listEl.innerHTML = rooms.map(room => `
+          <div class="room-item">
+            <div class="room-info">
+              <strong>${room.name}</strong>
+              <span class="room-code">${room.code}</span>
+              <span class="room-users">${room.users} user</span>
+            </div>
+            <button class="btn btn-small btn-primary" onclick="joinRoom('${room.code}')">Gabung</button>
+          </div>
+        `).join('');
+      } catch (err) {
+        console.error('Failed to load rooms');
+      }
+    }
+    
+    function joinRoom(code) {
+      document.getElementById('roomCode').value = code;
+      document.getElementById('joinRoomForm').dispatchEvent(new Event('submit'));
+    }
+    
+    // Initial load
+    loadRooms();
+    
+    // Refresh rooms every 5 seconds
+    setInterval(loadRooms, 5000);
+  </script>
+</body>
+</html>

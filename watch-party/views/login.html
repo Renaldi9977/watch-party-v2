@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Watch Party - Login</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="auth-box">
+      <div class="logo">
+        <span class="logo-icon">🎬</span>
+        <h1>Watch Party</h1>
+        <p class="tagline">Nonton bareng, ngobrol bareng</p>
+      </div>
+      
+      <div class="tabs">
+        <button class="tab active" data-tab="login">Masuk</button>
+        <button class="tab" data-tab="register">Daftar</button>
+      </div>
+      
+      <form id="loginForm" class="auth-form active">
+        <div class="form-group">
+          <label for="loginUsername">Username</label>
+          <input type="text" id="loginUsername" placeholder="Masukkan username" required>
+        </div>
+        <div class="form-group">
+          <label for="loginPassword">Password</label>
+          <input type="password" id="loginPassword" placeholder="Masukkan password" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Masuk</button>
+        <p class="error-msg" id="loginError"></p>
+      </form>
+      
+      <form id="registerForm" class="auth-form">
+        <div class="form-group">
+          <label for="regUsername">Username</label>
+          <input type="text" id="regUsername" placeholder="Pilih username" required>
+        </div>
+        <div class="form-group">
+          <label for="regPassword">Password</label>
+          <input type="password" id="regPassword" placeholder="Pilih password" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Daftar</button>
+        <p class="error-msg" id="registerError"></p>
+      </form>
+    </div>
+  </div>
+  
+  <script>
+    // Tab switching
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        
+        const targetTab = tab.dataset.tab;
+        document.querySelectorAll('.auth-form').forEach(form => form.classList.remove('active'));
+        document.getElementById(targetTab + 'Form').classList.add('active');
+      });
+    });
+    
+    // Login
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('loginUsername').value;
+      const password = document.getElementById('loginPassword').value;
+      const errorEl = document.getElementById('loginError');
+      
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        
+        const data = await res.json();
+        
+        if (data.success) {
+          localStorage.setItem('username', username);
+          window.location.href = '/dashboard';
+        } else {
+          errorEl.textContent = data.error;
+        }
+      } catch (err) {
+        errorEl.textContent = 'Terjadi kesalahan. Coba lagi.';
+      }
+    });
+    
+    // Register
+    document.getElementById('registerForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('regUsername').value;
+      const password = document.getElementById('regPassword').value;
+      const errorEl = document.getElementById('registerError');
+      
+      try {
+        const res = await fetch('/api/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        
+        const data = await res.json();
+        
+        if (data.success) {
+          errorEl.style.color = '#22c55e';
+          errorEl.textContent = 'Registrasi berhasil! Silakan login.';
+          document.querySelector('[data-tab="login"]').click();
+          document.getElementById('loginUsername').value = username;
+        } else {
+          errorEl.textContent = data.error;
+        }
+      } catch (err) {
+        errorEl.textContent = 'Terjadi kesalahan. Coba lagi.';
+      }
+    });
+  </script>
+</body>
+</html>

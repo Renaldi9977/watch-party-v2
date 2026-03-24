@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Watch Party - Room</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="room-container">
+    <!-- Header -->
+    <header class="room-header">
+      <div class="room-title">
+        <a href="/dashboard" class="back-btn">←</a>
+        <div>
+          <h1 id="roomName">Loading...</h1>
+          <span class="room-code-display">Kode: <strong id="roomCodeDisplay">------</strong></span>
+        </div>
+      </div>
+      <div class="room-controls">
+        <span id="hostBadge" class="host-badge hidden">HOST</span>
+        <button id="leaveBtn" class="btn btn-small btn-danger">Keluar</button>
+      </div>
+    </header>
+    
+    <!-- Main Content -->
+    <main class="room-main">
+      <!-- Video Section -->
+      <section class="video-section">
+        <div id="videoContainer" class="video-container">
+          <div id="playerPlaceholder" class="player-placeholder">
+            <p>🎬 Menunggu video dari host...</p>
+            <p class="hint">Host akan memasukkan link video</p>
+          </div>
+          <div id="youtubePlayer"></div>
+        </div>
+        
+        <div id="videoInput" class="video-input hidden">
+          <input type="text" id="videoUrl" placeholder="Paste link YouTube di sini...">
+          <button id="loadVideoBtn" class="btn btn-primary">Load</button>
+        </div>
+        
+        <div id="videoControls" class="video-controls hidden">
+          <button id="playPauseBtn" class="btn btn-small">▶ Play</button>
+          <span class="time-display">
+            <span id="currentTime">0:00</span> / <span id="duration">0:00</span>
+          </span>
+          <input type="range" id="seekBar" class="seek-bar" min="0" max="100" value="0">
+        </div>
+      </section>
+      
+      <!-- Content Area: Voice + Chat -->
+      <div class="content-area">
+        <!-- Voice Users Section -->
+        <section class="voice-section">
+          <h3>📹 Di Room (<span id="userCount">0</span>)</h3>
+          <div id="voiceGrid" class="voice-grid"></div>
+          
+          <!-- Voice Status Bar -->
+          <div class="voice-status-bar">
+            <div class="voice-status-text">
+              <span class="status-indicator" id="statusIndicator"></span>
+              <span id="voiceStatusText">Voice tidak aktif</span>
+            </div>
+            <div class="voice-controls">
+              <button id="micBtn" class="voice-btn" title="Aktifkan Voice Chat">
+                🎤
+              </button>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Chat Section -->
+        <section class="chat-section">
+          <div class="chat-header">
+            <h3>💬 Chat</h3>
+          </div>
+          <div id="chatMessages" class="chat-messages"></div>
+          <form id="chatForm" class="chat-form">
+            <input type="text" id="chatInput" placeholder="Ketik pesan..." autocomplete="off">
+            <button type="submit" class="btn btn-primary btn-small">Kirim</button>
+          </form>
+        </section>
+      </div>
+    </main>
+  </div>
+  
+  <!-- Audio Element untuk Voice Chat -->
+  <audio id="voiceAudio" autoplay style="display:none;"></audio>
+  
+  <!-- YouTube IFrame API -->
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <!-- Socket.IO -->
+  <script src="/socket.io/socket.io.js"></script>
+  
+  <script>
+    // ==========================================
+    // KONFIGURASI AWAL
+    // ==========================================
+    
+    // Check login
+    const username = localStorage.getItem('username');
+    if (!username) {
+      window.location.href = '/login';
+    }
+    
+    const roomCode = window.location.pathname.split('/').pop();
+    
+    // State
+    let socket = null;
+    let player = null;
+    let isHost = false;
+    let isMuted = false;
+    let localStream = null;
+    let voiceEnabled = false;
+    const peerConnections = {};
+    const roomUsers = [];
+    
+    // Elements
+    const roomNameEl = document.getElementById('roomName');
+    const roomCodeDisplayEl = document.getElementById('roomCodeDisplay');
+    const hostBadgeEl = document.getElementById('hostBadge');
+    const videoInputEl = document.getElementById('videoInput');
+    const videoControlsEl = document.getElementById('videoControls');
+    const playerPlaceholderEl = document.getElementById('playerPlaceholder');
+    const voiceGridEl = document.getElementById('voiceGrid');
+    const voiceStatusTextEl = document.getElementById('voiceStatusText');
+    const statusIndicatorEl = document.getElementById('statusIndicator');
+    const userCountEl = document.getElementById('userCount');
+    const chatMessagesEl = document.getElementById('chatMessages');
+    const chatFormEl = document.getElementById('chatForm');
+    const chatInputEl = document.getElementById('chatInput');
+    const micBtnEl = document.getElementById('micBtn');
+    const voiceAudioEl = document.getElementById('voiceAudio');
+    
+    // ==========================================
+    // SOCKET.IO
+    // ==========================================
+    
+    socket = io();
+    
+    socket.on('connect', () => {
+      socket.emit('join-room', { roomCode, username });
+      statusIndicatorEl.classList.add('connecting');
+    });
+    
+    socket.on('room-joined', (data) => {
+      roomNameEl.textContent = data.roomName;
+      roomCodeDisplayEl.textContent = data.roomCode;
+      isHost = data.isHost;
+      
+      if (isHost) {
+        hostBadgeEl.classList.remove('hidden');
+        videoInputEl.classList.remove('hidden');
+        videoControlsEl.classList.remove('hidden');
+      }
+      
+      updateUsersList(data.users);
+      
+      if (data.videoUrl) {
+        loadYouTubeVideo(data.videoUrl, data.videoState);
+      }
+    });
+    
+    socket.on('user-joined', (data) => {
+      updateUsersList(data.users);
+      addChatMessage(null, `${data.username} bergabung`, true);
+    });
+    
+    socket.on('user-left', (data) => {
+      updateUsersList(data.users);
+      if (peerConnections[data.username]) {
+        delete peerConnections[data.username];
+      }
+      addChatMessage(null, `${data.username} keluar`, true);
+    });
+    
+    socket.on('host-changed', (data) => {
+      if (data.newHost === username) {
+        isHost = true;
+        hostBadgeEl.classList.remove('hidden');
+        videoInputEl.classList.remove('hidden');
+        videoControlsEl.classList.remove('hidden');
+        addChatMessage(null, 'Kamu sekarang adalah host', true);
+      }
+    });
+    
+    socket.on('video-changed', (data) => {
+      loadYouTubeVideo(data.videoUrl);
+    });
+    
+    socket.on('video-sync', (data) => {
+      if (!isHost && player && player.seekTo) {
+        player.seekTo(data.currentTime);
+        if (data.action === 'play') {
+          player.playVideo();
+        } else if (data.action === 'pause') {
+          player.pauseVideo();
+        }
+      }
+    });
+    
+    socket.on('chat-message', (data) => {
+      addChatMessage(data.username, data.message, false, data.time);
+    });
+    
+    // Voice signaling
+    socket.on('voice-user-joined', async ({ socketId, username: remoteUsername }) => {
+      if (socketId === socket.id || !voiceEnabled) return;
+      await createPeerConnection(socketId, remoteUsername, true);
+    });
+    
+    socket.on('voice-offer', async ({ socketId, offer }) => {
+      if (!voiceEnabled) return;
+      await handleOffer(socketId, offer);
+    });
+    
+    socket.on('voice-answer', async ({ socketId, answer }) => {
+      await handleAnswer(socketId, answer);
+    });
+    
+    socket.on('voice-ice-candidate', async ({ socketId, candidate }) => {
+      await handleIceCandidate(socketId, candidate);
+    });
+    
+    // ==========================================
+    // YOUTUBE PLAYER - Media Audio (Speaker)
+    // ==========================================
+    
+    function onYouTubeIframeAPIReady() {
+      console.log('YouTube API Ready');
+    }
+    
+    function loadYouTubeVideo(videoUrl, state = null) {
+      const videoId = extractYouTubeId(videoUrl);
+      if (!videoId) {
+        alert('Link YouTube tidak valid');
+        return;
+      }
+      
+      playerPlaceholderEl.classList.add('hidden');
+      
+      if (player) {
+        player.loadVideoById(videoId);
+        return;
+      }
+      
+      // YouTube Player - akan otomatis menggunakan MEDIA audio (speaker)
+      player = new YT.Player('youtubePlayer', {
+        height: '100%',
+        width: '100%',
+        videoId: videoId,
+        playerVars: {
+          'playsinline': 1,
+          'controls': isHost ? 1 : 0,
+          'disablekb': isHost ? 0 : 1,
+          'modestbranding': 1,
+          'rel': 0
+        },
+        events: {
+          'onReady': (event) => {
+            player.setPlaybackQuality('hd720');
+            player.setVolume(100);
+            
+            if (state && state.currentTime > 0) {
+              player.seekTo(state.currentTime);
+              if (state.playing) {
+                player.playVideo();
+              } else {
+                player.pauseVideo();
+              }
+            }
+            updateVideoControls();
+          },
+          'onStateChange': onPlayerStateChange
+        }
+      });
+    }
+    
+    function extractYouTubeId(url) {
+      const patterns = [
+        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+        /youtube\.com\/shorts\/([^&\n?#]+)/
+      ];
+      for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match) return match[1];
+      }
+      return null;
+    }
+    
+    function onPlayerStateChange(event) {
+      if (!isHost) return;
+      
+      const action = event.data === YT.PlayerState.PLAYING ? 'play' : 
+                     event.data === YT.PlayerState.PAUSED ? 'pause' : null;
+      
+      if (action) {
+        socket.emit('video-control', {
+          roomCode,
+          action,
+          currentTime: player.getCurrentTime(),
+          username
+        });
+      }
+    }
+    
+    function updateVideoControls() {
+      if (!player) return;
+      
+      const duration = player.getDuration();
+      document.getElementById('duration').textContent = formatTime(duration);
+      
+      setInterval(() => {
+        if (player && player.getCurrentTime) {
+          const current = player.getCurrentTime();
+          document.getElementById('currentTime').textContent = formatTime(current);
+          document.getElementById('seekBar').value = (current / duration) * 100;
+        }
+      }, 1000);
+    }
+    
+    function formatTime(seconds) {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${mins}:${secs.toString().padStart(2, '0')}`;
+    }
+    
+    // Video controls
+    document.getElementById('loadVideoBtn').addEventListener('click', () => {
+      const url = document.getElementById('videoUrl').value.trim();
+      if (url) {
+        socket.emit('set-video', { roomCode, videoUrl: url, username });
+      }
+    });
+    
+    document.getElementById('playPauseBtn').addEventListener('click', () => {
+      if (!player || !isHost) return;
+      
+      const btn = document.getElementById('playPauseBtn');
+      const state = player.getPlayerState();
+      
+      if (state === YT.PlayerState.PLAYING) {
+        player.pauseVideo();
+        btn.textContent = '▶ Play';
+      } else {
+        player.playVideo();
+        btn.textContent = '⏸ Pause';
+      }
+    });
+    
+    document.getElementById('seekBar').addEventListener('input', (e) => {
+      if (!player || !isHost) return;
+      const seekTo = (player.getDuration() * e.target.value) / 100;
+      player.seekTo(seekTo);
+      socket.emit('video-control', {
+        roomCode,
+        action: 'seek',
+        currentTime: seekTo,
+        username
+      });
+    });
+    
+    // ==========================================
+    // CHAT
+    // ==========================================
+    
+    chatFormEl.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const message = chatInputEl.value.trim();
+      if (message) {
+        socket.emit('chat-message', { roomCode, username, message });
+        chatInputEl.value = '';
+      }
+    });
+    
+    function addChatMessage(sender, message, isSystem = false, time = null) {
+      const msgEl = document.createElement('div');
+      msgEl.className = 'chat-message' + (isSystem ? ' system' : '');
+      
+      if (isSystem) {
+        msgEl.innerHTML = `<span class="chat-text">${message}</span>`;
+      } else {
+        msgEl.innerHTML = `
+          <div class="chat-message-header">
+            <span class="chat-sender">${sender}</span>
+            ${time ? `<span class="chat-time">${time}</span>` : ''}
+          </div>
+          <span class="chat-text">${message}</span>
+        `;
+      }
+      
+      chatMessagesEl.appendChild(msgEl);
+      chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+    }
+    
+    // ==========================================
+    // USERS LIST
+    // ==========================================
+    
+    function updateUsersList(users) {
+      roomUsers.length = 0;
+      roomUsers.push(...users);
+      
+      userCountEl.textContent = users.length;
+      
+      voiceGridEl.innerHTML = users.map(u => {
+        const initial = u.charAt(0).toUpperCase();
+        const isYou = u === username;
+        const hasVoice = voiceEnabled && isYou;
+        return `
+          <div class="voice-user-card ${isYou ? 'you' : ''}" id="voice-${u}">
+            <div class="voice-avatar">
+              ${initial}
+              <span class="mic-status ${isMuted && hasVoice ? 'muted' : ''}" id="mic-${u}">
+                ${isMuted && hasVoice ? '🔇' : (hasVoice ? '🎤' : '❌')}
+              </span>
+            </div>
+            <span class="voice-name ${isYou ? 'you' : ''}">${isYou ? 'Kamu' : u}</span>
+          </div>
+        `;
+      }).join('');
+    }
+    
+    // ==========================================
+    // VOICE CHAT - Communication Audio (Earpiece)
+    // ⚠️ PERINGATAN: Mengaktifkan voice chat akan mengubah
+    // routing audio KE SELURUH HALAMAN ke mode telepon (earpiece)
+    // ==========================================
+    
+    async function initVoiceChat() {
+      try {
+        // Request microphone
+        localStream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }, 
+          video: false 
+        });
+        
+        voiceEnabled = true;
+        isMuted = false;
+        
+        micBtnEl.classList.add('active');
+        micBtnEl.textContent = '🎤';
+        
+        voiceStatusTextEl.textContent = 'Voice aktif';
+        statusIndicatorEl.classList.remove('connecting', 'error');
+        
+        // Notify server
+        socket.emit('voice-join', { roomCode, username });
+        
+        // Update users list
+        updateUsersList(roomUsers);
+        
+      } catch (err) {
+        console.error('Microphone access denied:', err);
+        voiceStatusTextEl.textContent = 'Mic tidak diizinkan';
+        statusIndicatorEl.classList.add('error');
+      }
+    }
+    
+    function stopVoiceChat() {
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+      }
+      
+      // Close all peer connections
+      Object.values(peerConnections).forEach(pc => pc.close());
+      Object.keys(peerConnections).forEach(key => delete peerConnections[key]);
+      
+      voiceEnabled = false;
+      isMuted = true;
+      
+      micBtnEl.classList.remove('active');
+      micBtnEl.textContent = '🎤';
+      
+      voiceStatusTextEl.textContent = 'Voice tidak aktif';
+      statusIndicatorEl.classList.remove('error');
+      
+      updateUsersList(roomUsers);
+    }
+    
+    async function createPeerConnection(remoteSocketId, remoteUsername, isInitiator) {
+      const config = {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      };
+      
+      const pc = new RTCPeerConnection(config);
+      peerConnections[remoteSocketId] = pc;
+      
+      if (localStream) {
+        localStream.getTracks().forEach(track => {
+          pc.addTrack(track, localStream);
+        });
+      }
+      
+      pc.ontrack = (event) => {
+        // Play remote audio
+        voiceAudioEl.srcObject = event.streams[0];
+        voiceAudioEl.play().catch(() => {});
+      };
+      
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('voice-ice-candidate', {
+            targetId: remoteSocketId,
+            candidate: event.candidate
+          });
+        }
+      };
+      
+      if (isInitiator) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('voice-offer', { targetId: remoteSocketId, offer });
+      }
+    }
+    
+    async function handleOffer(remoteSocketId, offer) {
+      if (!localStream) return;
+      
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      });
+      peerConnections[remoteSocketId] = pc;
+      
+      localStream.getTracks().forEach(track => {
+        pc.addTrack(track, localStream);
+      });
+      
+      pc.ontrack = (event) => {
+        voiceAudioEl.srcObject = event.streams[0];
+        voiceAudioEl.play().catch(() => {});
+      };
+      
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('voice-ice-candidate', {
+            targetId: remoteSocketId,
+            candidate: event.candidate
+          });
+        }
+      };
+      
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit('voice-answer', { targetId: remoteSocketId, answer });
+    }
+    
+    async function handleAnswer(remoteSocketId, answer) {
+      const pc = peerConnections[remoteSocketId];
+      if (pc) {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      }
+    }
+    
+    async function handleIceCandidate(remoteSocketId, candidate) {
+      const pc = peerConnections[remoteSocketId];
+      if (pc) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+    }
+    
+    // Mic button - toggle voice chat
+    micBtnEl.addEventListener('click', async () => {
+      if (!voiceEnabled) {
+        // Enable voice chat
+        // ⚠️ PERINGATAN: Ini akan mengubah audio routing ke mode telepon
+        await initVoiceChat();
+      } else {
+        // Toggle mute
+        const audioTrack = localStream?.getAudioTracks()[0];
+        if (audioTrack) {
+          isMuted = !isMuted;
+          audioTrack.enabled = !isMuted;
+          micBtnEl.classList.toggle('muted', isMuted);
+          micBtnEl.textContent = isMuted ? '🔇' : '🎤';
+          
+          updateUsersList(roomUsers);
+        }
+      }
+    });
+    
+    // ==========================================
+    // CLEANUP
+    // ==========================================
+    
+    document.getElementById('leaveBtn').addEventListener('click', () => {
+      stopVoiceChat();
+      socket.disconnect();
+      window.location.href = '/dashboard';
+    });
+    
+    window.addEventListener('beforeunload', () => {
+      stopVoiceChat();
+    });
+  </script>
+</body>
+</html>
